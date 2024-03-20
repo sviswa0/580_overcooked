@@ -9,7 +9,8 @@ import numpy as np
 from overcooked_ai_py.mdp.actions import Action
 from overcooked_ai_py.mdp.overcooked_mdp import Recipe
 from overcooked_ai_py.utils import OvercookedException
-
+import random
+import tensorflow as tf
 
 class Agent(object):
     agent_file_name = "agent.pickle"
@@ -164,33 +165,23 @@ class AgentPair(AgentGroup):
             return super().joint_action(state)
 
 
-class NNPolicy(object):
-    """
-    This is a common format for NN-based policies. Once one has wrangled the intended trained neural net
-    to this format, one can then easily create an Agent with the AgentFromPolicy class.
-    """
-
+class PolicyNetwork(Policy):
     def __init__(self):
-        pass
+        self.model = self._build_model()
+
+    def _build_model(self):
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(4, activation='sigmoid', input_shape=(2,)), #state info is here, 2 obs
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        return model
 
     def multi_state_policy(self, states, agent_indices):
-        """
-        A function that takes in multiple OvercookedState instances and their respective agent indices and returns action probabilities.
-        """
-        raise NotImplementedError()
-
-    def multi_obs_policy(self, states):
-        """
-        A function that takes in multiple preprocessed OvercookedState instatences and returns action probabilities.
-        """
-        raise NotImplementedError()
-
+        inputs = np.array([[state.feature1, state.feature2] for state in states]) #inputs fed in here
+        return self.model.predict(inputs)
 
 class AgentFromPolicy(Agent):
-    """
-    This is a useful Agent class backbone from which to subclass from NN-based agents.
-    """
-
     def __init__(self, policy):
         """
         Takes as input an NN Policy instance
@@ -601,6 +592,56 @@ class SampleAgent(Agent):
         action_probs = action_probs / len(self.agents)
         return Action.sample(action_probs), {"action_probs": action_probs}
 
+class (NNPolicy):
+    def __init__(self):
+        self.model = self._build_model()
+
+    def _build_model(self):
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(4, activation='sigmoid', input_shape=(2,)),  # 2 input features
+            tf.keras.layers.Dense(1, activation='sigmoid')
+        ])
+        model.compile(optimizer='adam', loss='mse')
+        return model
+
+    def multi_state_policy(self, states, agent_indices):
+        inputs = np.array([[state.feature1, state.feature2] for state in states])
+        return self.model.predict(inputs)
+
+class EvoAgent(Agent):
+    def __init__(self, population_size, policy_class):
+        self.population_size = population_size
+        self.population = [policy_class() for _ in range(population_size)]
+
+    def fitness_calc(self):
+        return overcooked_mdp.value()
+        #this is the value provided in the mdp defn of the game,
+        #makes it so that the game score is just the fitness used to eval
+
+    def tournament_selection(self, k=3):
+        tournament = random.sample(self.population, k)
+        tournament.sort(key=lambda x: x.fitness, reverse=True) 
+        return tournament[0]
+        #binary tournament between policies
+
+    def mutate(self, agent, mutation_rate=0.1, mutation_scale=0.1):
+        weights = agent.model.get_weights()
+        mutated_weights = [w + np.random.normal(scale=mutation_scale, size=w.shape) for w in weights]
+        agent.model.set_weights(mutated_weights)
+        #guassian white noise for mutation step
+
+    def evolve(self):
+        self.fitness_calc()
+        #down selection happens here
+        new_population = []
+
+        for _ in range(self.population_size):
+            parent = self.tournament_selection()
+            offspring = MyNNPolicy()
+            offspring.model.set_weights(parent.model.get_weights())
+            self.mutate(offspring)
+            new_population.append(offspring)
+        self.population = new_population
 
 # Deprecated. Need to fix Heuristic to work with the new MDP to reactivate Planning
 # class CoupledPlanningAgent(Agent):
